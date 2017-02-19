@@ -3,8 +3,15 @@
 import os
 import pandas as pd
 import numpy as np
+import csv
 import tensorflow as tf
 import cv2
+import matplotlib.pyplot as plt
+import scipy.misc
+import random
+from os import getcwd
+from scipy.ndimage import rotate
+from scipy.stats import bernoulli
 
 from pandas.io.parsers import read_csv
 from sklearn.utils import shuffle
@@ -15,15 +22,84 @@ from keras.layers import Dropout, Lambda, ELU, Cropping2D
 from keras.optimizers import Adam, RMSprop, SGD
 from keras.layers.pooling import MaxPooling2D
 from keras.regularizers import l2, activity_l2
-from keras.callbacks import LearningRateScheduler, EarlyStopping
+from keras.callbacks import LearningRateScheduler, EarlyStopping, ModelCheckpoint
 from keras import initializations
 from keras.models import model_from_json
 from keras import backend as K
 import json
 
-from helper import generate_next_batch
-import matplotlib.pyplot as plt
 
+def random_flip(image, steering_angle, flipping_prob=0.5):
+    if random.random() < flipping_prob:
+        return np.fliplr(image), -1 * steering_angle
+    else:
+        return image, steering_angle
+
+def random_shear(image, steering_angle, shear_range=200):
+
+    rows, cols, ch = image.shape
+    dx = np.random.randint(-shear_range, shear_range + 1)
+    random_point = [cols / 2 + dx, rows / 2]
+    pts1 = np.float32([[0, rows], [cols, rows], [cols / 2, rows / 2]])
+    pts2 = np.float32([[0, rows], [cols, rows], random_point])
+    dsteering = dx / (rows / 2) * 360 / (2 * np.pi * 25.0) / 6.0
+    M = cv2.getAffineTransform(pts1, pts2)
+    image = cv2.warpAffine(image, M, (cols, rows), borderMode=1)
+    steering_angle += dsteering
+
+    return image, steering_angle
+
+def random_brightness(image, median=0.8, dev=0.4):
+    hsv = cv2.cvtColor(image,cv2.COLOR_RGB2HSV)
+    random_bright = median + dev * np.random.uniform(-1.0, 1.0)
+    hsv[:,:,2] = hsv[:,:,2]*random_bright
+
+    rgb = cv2.cvtColor(hsv,cv2.COLOR_HSV2RGB)
+    return rgb
+
+def new_img(image, steering_angle):
+    image, steering_angle = random_shear(image, steering_angle)
+    image, steering_angle = random_flip(image, steering_angle)
+    image = random_brightness(image)
+    return image, steering_angle
+
+STEERING_CORRECTION = 0.2
+
+def get_next_images(batch_size=32):
+    pos = np.random.randint(0, num_of_img, batch_size)
+
+    image_files_and_angles = []
+    for index in pos:
+        rnd_image = np.random.randint(0, 3)
+        if rnd_image == 0:
+            img = data.iloc[index]['left'].strip()
+            angle = data.iloc[index]['steering'] + STEERING_CORRECTION
+            image_files_and_angles.append((img, angle))
+
+        elif rnd_image == 1:
+            img = data.iloc[index]['center'].strip()
+            angle = data.iloc[index]['steering']
+            image_files_and_angles.append((img, angle))
+        else:
+            img = data.iloc[index]['right'].strip()
+            angle = data.iloc[index]['steering'] - STEERING_CORRECTION
+            image_files_and_angles.append((img, angle))
+
+    return image_files_and_angles
+
+def generator(batch_size=32):
+    while True:
+        x = []
+        y = []
+        images = get_next_images(batch_size)
+        for img_file, steering_angle in images:
+            image = plt.imread(DATA_PATH + img_file)
+            angle = steering_angle
+            new_image, new_angle = new_img(image, angle)
+            x.append(new_image)
+            y.append(new_angle)
+
+        yield np.array(x), np.array(y)
 
 
 # NVIDIA model
@@ -37,8 +113,8 @@ def get_model():
     nb_epoch = 10
 
     model = Sequential()
-    model.add(Lambda(lambda x: (x/255.0)-0.5,input_shape=input_shape,output_shape=input_shape))
-    model.add(Cropping2D(cropping=((70,25),(0,0))))
+    model.add(Lambda(lambda x: x/127.5 - 1.,input_shape=input_shape,output_shape=input_shape))
+    model.add(Cropping2D(cropping=((50,20),(0,0))))
     model.add(Convolution2D(24, 5, 5, subsample=(2, 2), border_mode='valid', W_regularizer=l2(0.001)))
     model.add(ELU())
     model.add(Convolution2D(36, 5, 5, subsample=(2, 2), border_mode='valid', W_regularizer=l2(0.001)))
@@ -77,41 +153,37 @@ def get_model():
 model = get_model()
 
 # Train the model
-batch_size = 256
-number_of_samples_per_epoch = 20480
-
-def split(csv, val_split):
-	shuffled = csv.iloc[np.random.permutation(len(csv))]
-	validation_samples = int(len(csv) * val_split)
-	return (shuffled[validation_samples:],
-				shuffled[:validation_samples])
-
+batch_size = 32
+number_of_samples_per_epoch = 25600
 
 ## Import data
-# Added header row manually to CSV.
-# driving_csv = pd.read_csv("data/course1_driving_log.csv")
-driving_csv = pd.read_csv("data/course3_driving_log.csv")
+
+#driving_csv = pd.read_csv("data/course1_driving_log.csv")
+DATA_PATH = './data/'
+
+#col_names = ['center', 'left','right','steering','throttle','brake','speed']
+data = pd.read_csv(DATA_PATH + 'Udacity_driving_log.csv')
+num_of_img = len(data)
 
 # Examine data
-print("Number of datapoints: %d" % len(driving_csv))
+print("Number of datapoints: %d" % num_of_img)
 
-driving_csv.head()
+#train_data, val_data = train_test_split(driving_csv, test_size=0.1)
+#number_of_validation = len(val_data)
 
-train_data, val_data = split(driving_csv, 0.2)
-number_of_validation = len(val_data)
+#train_generate = generator(train_data)
+#validation_generate = generator(val_data)
 
-train_generate = generate_next_batch(train_data)
-validation_generate = generate_next_batch(val_data)
-
-history_object = model.fit_generator(train_generate,
-                  samples_per_epoch = 20480,
+history_object = model.fit_generator(generator(batch_size=32),
+                  samples_per_epoch = 25600,
                   nb_epoch = 10,
-                  validation_data = validation_generate,
-                  nb_val_samples = number_of_validation,
+                  validation_data = generator(batch_size=32),
+                  nb_val_samples = 5120,
                   verbose = 1)
 
 ### print the keys contained in the history object
 print(history_object.history.keys())
+print(model.summary())
 
 ### plot the training and validation loss for each epoch
 #plt.plot(history_object.history['loss'])
@@ -125,9 +197,9 @@ print(history_object.history.keys())
 print('Save the model')
 
 #model.save_weights('./model.h5')
-model.save('model.h5')
+model.save('model_course1.h5')
 json_string = model.to_json()
-with open('./model.json', 'w') as f:
+with open('./model_course1.json', 'w') as f:
     f.write(json_string)
 
 print('Done')
