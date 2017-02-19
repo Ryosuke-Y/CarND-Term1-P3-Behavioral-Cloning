@@ -3,7 +3,6 @@ import base64
 from datetime import datetime
 import os
 import shutil
-import json
 
 import numpy as np
 import socketio
@@ -12,20 +11,16 @@ import eventlet.wsgi
 from PIL import Image
 from flask import Flask
 from io import BytesIO
-from helper import resize, crop
 
-from keras.models import model_from_json
 from keras.models import load_model
-from keras.preprocessing.image import ImageDataGenerator, array_to_img, img_to_array
 import h5py
 from keras import __version__ as keras_version
-import tensorflow as tf
-tf.python.control_flow_ops = tf
 
 sio = socketio.Server()
 app = Flask(__name__)
 model = None
 prev_image_array = None
+
 
 class SimplePIController:
     def __init__(self, Kp, Ki):
@@ -52,6 +47,7 @@ controller = SimplePIController(0.1, 0.002)
 set_speed = 9
 controller.set_desired(set_speed)
 
+
 @sio.on('telemetry')
 def telemetry(sid, data):
     if data:
@@ -65,10 +61,11 @@ def telemetry(sid, data):
         imgString = data["image"]
         image = Image.open(BytesIO(base64.b64decode(imgString)))
         image_array = np.asarray(image)
-        image_array = crop(image_array)
-        image_array = resize(image_array, resize_dim=(64,64))
+        #image_array = crop(image_array)
+
         steering_angle = float(model.predict(image_array[None, :, :, :], batch_size=1))
-        throttle = 0.2
+        throttle = controller.update(float(speed))
+
         print(steering_angle, throttle)
         send_control(steering_angle, throttle)
 
@@ -105,7 +102,13 @@ if __name__ == '__main__':
         type=str,
         help='Path to model h5 file. Model should be on the same path.'
     )
-
+    parser.add_argument(
+        'image_folder',
+        type=str,
+        nargs='?',
+        default='',
+        help='Path to image folder. This is where the images from the run will be saved.'
+    )
     args = parser.parse_args()
 
     # check that model Keras version is same as local Keras version
@@ -117,14 +120,7 @@ if __name__ == '__main__':
         print('You are using Keras version ', keras_version,
               ', but the model was built using ', model_version)
 
-    # model = load_model(args.model)
-
-    with open(args.model, 'r') as f:
-        model = model_from_json(f.read())
-
-    model.compile("sgd", "mse")
-    weights_file = args.model.replace('json', 'h5')
-    model.load_weights(weights_file)
+    model = load_model(args.model)
 
     if args.image_folder != '':
         print("Creating image folder at {}".format(args.image_folder))
