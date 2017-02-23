@@ -168,12 +168,6 @@ num_of_img = len(data)
 # Examine data
 print("Number of datapoints: %d" % num_of_img)
 
-#train_data, val_data = train_test_split(driving_csv, test_size=0.1)
-#number_of_validation = len(val_data)
-
-#train_generate = generator(train_data)
-#validation_generate = generator(val_data)
-
 history_object = model.fit_generator(generator(batch_size=32),
                   samples_per_epoch = 25600,
                   nb_epoch = 10,
