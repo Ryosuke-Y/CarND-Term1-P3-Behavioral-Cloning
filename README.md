@@ -30,8 +30,6 @@ We could get the training data from training mode, but I couldn't get a good dat
 - color channels: 3 (RGB)
 - dimensions: 320x160
 
-![Simulator](images/Simulator.png)
-
 Attributes available in the dataset:
 
 - 'center' - center camera image
